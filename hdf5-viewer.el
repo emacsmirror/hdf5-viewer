@@ -106,21 +106,33 @@ Saves buffer positions when navigating backwards.")
 (defun hdf5-viewer--get-field-at-cursor ()
   "Return field (group or dataset) at cursor position.
 
-Return nil if there is nothing on this line."
-  (end-of-line)
-  (backward-word)
-  (let ((field (thing-at-point 'filename t)))
-    (when field
-      (hdf5-viewer--fix-path (concat hdf5-viewer-root "/" field)))))
+Return nil if there is nothing on this line.  This is hacky code --
+hard-coded to take the text from the 47th column to the end of the last
+word, using `backward-to-word'.  Let the downstream python code take
+care of spaces in the field name.
+
+Prior code used `thing-at-point' interpreted as a filename, but this
+would fail on field names with whitespace."
+  (when (> (- (pos-eol) (pos-bol)) 47)
+    (beginning-of-line)
+    (forward-char 47)
+    (let ((beg (point)))
+      (end-of-line)
+      (backward-to-word)
+      (let ((field (buffer-substring-no-properties beg (point))))
+        (when field
+          (hdf5-viewer--fix-path (concat hdf5-viewer-root "/" field)))))))
 
 (defun hdf5-viewer--is-group (field)
   "Return t if FIELD is a group."
-  (let ((output (hdf5-viewer--run-parser "--is-group" field hdf5-viewer-file)))
+  (let* ((field (replace-regexp-in-string " " "\\\\ " field))
+         (output (hdf5-viewer--run-parser "--is-group" field hdf5-viewer-file)))
     (gethash "return" output)))
 
 (defun hdf5-viewer--is-field (field)
   "Return t if FIELD is a field in the file."
-  (let ((output (hdf5-viewer--run-parser "--is-field" field hdf5-viewer-file)))
+  (let* ((field (replace-regexp-in-string " " "\\\\ " field))
+         (output (hdf5-viewer--run-parser "--is-field" field hdf5-viewer-file)))
     (gethash "return" output)))
 
 (defun hdf5-viewer--is-dataset (field)
@@ -200,17 +212,18 @@ DIRECTION indicates which way we are navigating the heirarchy:
   0: initialization
   1: forward
  -1: backwards"
-  (let ((inhibit-read-only t))
+  (let ((inhibit-read-only t)
+        (hdf5-viewer-root-spc (replace-regexp-in-string " " "\\\\ " hdf5-viewer-root)))
     (erase-buffer)
     (insert (format "%s %s"
                     (propertize "Root:" 'face 'bold)
                     hdf5-viewer-root))
     ;; display GROUPS and DATASETS for roots that are groups
     (when (hdf5-viewer--is-group hdf5-viewer-root)
-      (let ((fields (hdf5-viewer--run-parser "--get-fields" hdf5-viewer-root hdf5-viewer-file)))
+      (let ((fields (hdf5-viewer--run-parser "--get-fields" hdf5-viewer-root-spc hdf5-viewer-file)))
         (hdf5-viewer--display-fields fields)))
     ;; display ATTRIBUTES
-    (let* ((attrs  (hdf5-viewer--run-parser "--get-attrs"  hdf5-viewer-root hdf5-viewer-file))
+    (let* ((attrs  (hdf5-viewer--run-parser "--get-attrs"  hdf5-viewer-root-spc hdf5-viewer-file))
            (num-attrs (hash-table-count attrs)))
       (when (> num-attrs 0)
         (hdf5-viewer--display-attrs attrs)))
@@ -249,8 +262,9 @@ DIRECTION indicates which way we are navigating the heirarchy:
   "Display selected FIELD contents in minibuffer."
   (interactive "sEnter path: ")
   (when (hdf5-viewer--is-field field)
-    (let ((field  (hdf5-viewer--fix-path field))
-          (output (hdf5-viewer--run-parser "--preview-field" field hdf5-viewer-file)))
+    (let* ((field  (hdf5-viewer--fix-path field))
+           (field-spc (replace-regexp-in-string " " "\\\\ " field))
+           (output (hdf5-viewer--run-parser "--preview-field" field-spc hdf5-viewer-file)))
       (message "%s %s %s:\n%s"
                (propertize field 'face 'bold)
                (gethash "shape" output "")
@@ -279,7 +293,8 @@ DIRECTION indicates which way we are navigating the heirarchy:
               (setq hdf5-viewer-root field
                     hdf5-viewer--forward-point-list nil)
               (hdf5-viewer--display-root 0)))
-        (let* ((output (hdf5-viewer--run-parser "--read-dataset" field hdf5-viewer-file))
+        (let* ((field-spc (replace-regexp-in-string " " "\\\\ " field))
+               (output (hdf5-viewer--run-parser "--read-dataset" field-spc hdf5-viewer-file))
                (parent-buf (string-split (buffer-name (current-buffer)) "*" t))
                (dataset-buf (format "*%s%s*%s" (pop parent-buf) field (apply #'concat parent-buf))))
           (with-current-buffer (get-buffer-create dataset-buf)
@@ -336,9 +351,10 @@ the field is a group, then it is the same as
 (defun hdf5-viewer-plot-dataset-at-cursor ()
   "Plot 1D or 2D dataset with matplotlib."
   (interactive)
-  (let ((field (hdf5-viewer--get-field-at-cursor)))
+  (let* ((field (hdf5-viewer--get-field-at-cursor))
+         (field-spc (replace-regexp-in-string " " "\\\\ " field)))
     (if (hdf5-viewer--is-dataset field)
-        (hdf5-viewer--run-parser "--plot-dataset" field hdf5-viewer-file)
+        (hdf5-viewer--run-parser "--plot-dataset" field-spc hdf5-viewer-file)
       (message "No dataset found on this line."))))
 
 (defun hdf5-viewer-bypass-find-file (&optional filename _wildcards)
