@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Parser for hdf5-viewer.  Returns JSON objects for parsing in elisp."""
 
-# Copyright (C) 2024-2025 Paul Minner, Peter Mao, Caltech
+# Copyright (C) 2024-2026 Paul Minner, Peter Mao, Caltech
 
 import json
 import sys
 import argparse
+import warnings
 import numpy as np
 import h5py
-import warnings
 
 def meta_dict(obj) -> dict:
     """Common function to collect metadata from HDF5 object."""
@@ -50,7 +50,7 @@ def meta_dict(obj) -> dict:
                  'range': datarange,
                  'dtype': dtype}
     else:
-        raise Exception(f"'{obj.name}' is not a dataset or group")
+        raise TypeError(f"'{obj.name}' must be a Dataset or Group")
     return meta
 
 
@@ -62,7 +62,7 @@ class H5Instance:
     def get_fields(self, root: str) -> dict:
         """Get Groups and Datasets of the Group ROOT"""
         if not self.is_group(root)["return"]:
-            raise Exception(f"'{root}' is not a group")
+            raise TypeError(f"'{root}' is not a Group")
         obj = self.instance[root]
         fields = {}
         for cname, cobj in obj.items():
@@ -90,11 +90,26 @@ class H5Instance:
         """Return metadata and data of FIELD, only for Datasets."""
         obj = self.instance[field]
         if not isinstance(obj, h5py.Dataset):
-            raise Exception("Argument to --read-dataset must be a Dataset.")
+            raise TypeError("Argument to --read-dataset must be a Dataset.")
         meta = meta_dict(obj)
         np.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
         meta['data'] = str(obj[()])
         return meta
+
+    def plot_dataset(self, field: str):
+        """Plot the field if it is a dataset with 1 or 2 dimensions."""
+        import matplotlib.pyplot as plt
+        obj = self.instance[field]
+        if not isinstance(obj, h5py.Dataset):
+            raise TypeError("Argument to --plot-dataset must be a Dataset.")
+        if obj.ndim == 1:
+            plt.plot(obj[()])
+        elif obj.ndim ==2:
+            plt.imshow(obj[()])
+        else:
+            raise NotImplementedError("Plotting only supported for 1 or 2 dimensional datasets.")
+        plt.title(f'{obj.name}')
+        plt.show()
 
     def is_group(self, field: str) -> dict:
         """True for Groups.  False otherwise."""
@@ -113,7 +128,7 @@ class H5Instance:
     def get_attrs(self, root: str) -> dict:
         """Return attributes of Group or Dataset"""
         if not self.is_field(root)["return"]:
-            raise Exception("Argument to --get-attrs must be a Group or Dataset.")
+            raise TypeError("Argument to --get-attrs must be a Group or Dataset.")
         obj = self.instance[root]
         np.set_printoptions(linewidth=45)
         return {x[0]:str(x[1]) for x in obj.attrs.items()}
@@ -125,6 +140,7 @@ if __name__ == "__main__":
     parser.add_argument('--get-attrs'    , type=str, help='Print attributes of parent to root')
     parser.add_argument('--preview-field', type=str, help='Print preview of requested field')
     parser.add_argument('--read-dataset' , type=str, help='Print dataset data')
+    parser.add_argument('--plot-dataset' , type=str, help='Plot dataset data (up to 2 dims)')
     parser.add_argument('--is-group'     , type=str, help='Print true if field is group')
     parser.add_argument('--is-field'     , type=str, help='Print true if field exists in file')
     args = parser.parse_args()
@@ -139,6 +155,8 @@ if __name__ == "__main__":
         print(json.dumps(inst.preview_field(args.preview_field)))
     elif args.read_dataset:
         print(json.dumps(inst.read_dataset(args.read_dataset)))
+    elif args.plot_dataset:
+        print(json.dumps(inst.plot_dataset(args.plot_dataset)))
     elif args.is_group:
         print(json.dumps(inst.is_group(args.is_group)))
     elif args.is_field:
