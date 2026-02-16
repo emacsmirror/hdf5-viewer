@@ -86,6 +86,12 @@ viewed.")
 This is used to place the cursor when navigating back up the
 tree.")
 
+(defvar-local hdf5-viewer-fields nil
+  "Hash table of fields in the current root.")
+
+(defvar-local hdf5-viewer-attrs nil
+  "Hash table of attributes in the current root.")
+
 (defvar-local hdf5-viewer--forward-point-list nil
   "List of buffer point positions in the root heirarchy.
 
@@ -104,24 +110,23 @@ Saves buffer positions when navigating backwards.")
     npath))
 
 (defun hdf5-viewer--get-field-at-cursor ()
-  "Return field (group or dataset) at cursor position.
+  "Return field (group, dataset, or attribute) from current line.
 
-Return nil if there is nothing on this line.  This is hacky code --
-hard-coded to take the text from the 47th column to the end of the last
-word, using `backward-to-word'.  Let the downstream python code take
-care of spaces in the field name.
-
-Prior code used `thing-at-point' interpreted as a filename, but this
-would fail on field names with whitespace."
-  (when (> (- (pos-eol) (pos-bol)) 47)
-    (beginning-of-line)
-    (forward-char 47)
-    (let ((beg (point)))
-      (end-of-line)
-      (backward-to-word)
-      (let ((field (buffer-substring-no-properties beg (point))))
-        (when field
-          (hdf5-viewer--fix-path (concat hdf5-viewer-root "/" field)))))))
+Return nil if there is nothing on this line.  Slightly misnamed, since
+this works from the line number rather than cursor position."
+  (let* ((current-line (1+ (count-lines 1 (pos-bol))))
+         (n-pre-flds 3)
+         (num-fields (hash-table-count hdf5-viewer-fields))
+         (n-pre-attrs (+ 3 3 num-fields))
+         (num-attrs (hash-table-count hdf5-viewer-attrs)))
+    (cond ((and (> current-line n-pre-flds)
+                (<= current-line (+ n-pre-flds num-fields)))
+           (let ((field (nth (- current-line n-pre-flds 1) (reverse (hash-table-keys hdf5-viewer-fields)))))
+             (hdf5-viewer--fix-path (concat hdf5-viewer-root "/" field))))
+          ((and (> current-line n-pre-attrs)
+                (<= current-line (+ n-pre-attrs num-attrs)))
+           (let ((attr (nth (- current-line n-pre-attrs 1) (reverse (hash-table-keys hdf5-viewer-attrs)))))
+             (hdf5-viewer--fix-path (concat hdf5-viewer-root "/" attr)))))))
 
 (defun hdf5-viewer--is-group (field)
   "Return t if FIELD is a group."
@@ -162,11 +167,11 @@ Return t if FIELD is a Field but not a Group."
         (error "Parser script failed: %s"
                (buffer-substring (point-min) (point-max)))))))
 
-(defun hdf5-viewer--display-fields (fields)
-  "Display groups and datasets of FIELDS.
+(defun hdf5-viewer--display-fields ()
+  "Display groups and datasets of `hdf5-viewer-fields'.
 
-For each Group in FIELDS, display the type as \"group\" and the
-name.  For each Dataset in FIELDS, display the type, dimensions,
+For each Group in `hdf5-viewer-fields', display the type as \"group\" and the
+name.  For each Dataset in `hdf5-viewer-fields', display the type, dimensions,
 range, and name."
 
   (let ((template "%-8s %-15s %20s  %-30s\n"))
@@ -187,13 +192,13 @@ range, and name."
                                           dtype shape range key))))
                        ((string= type "other")
                         (insert (format template "other" "" "" key))))))
-             fields)))
+             hdf5-viewer-fields)))
 
-(defun hdf5-viewer--display-attrs (attrs)
-  "Display attributes of ATTRS.
+(defun hdf5-viewer--display-attrs ()
+  "Display attributes of `hdf5-viewer-attrs'.
 
-For each attribute in ATTRS, print key at the end of the first
-line and breaks val over multiple lines if necessary."
+For each attribute in `hdf5-viewer-attrs', print key at the end of the
+first line and breaks val over multiple lines if necessary."
   (let ((template  "%-45s  %-30s\n"))
     (insert "\n\n")
     (insert (propertize (format template "*value*" "*attribute*")
@@ -203,7 +208,7 @@ line and breaks val over multiple lines if necessary."
                  (insert (format template (pop substrings) key))
                  (dotimes (_junk (length substrings))
                    (insert (pop substrings) "\n"))))
-             attrs)))
+             hdf5-viewer-attrs)))
 
 (defun hdf5-viewer--display-root (direction)
   "Display current root group fields and attributes to buffer.
@@ -220,13 +225,12 @@ DIRECTION indicates which way we are navigating the heirarchy:
                     hdf5-viewer-root))
     ;; display GROUPS and DATASETS for roots that are groups
     (when (hdf5-viewer--is-group hdf5-viewer-root)
-      (let ((fields (hdf5-viewer--run-parser "--get-fields" hdf5-viewer-root-spc hdf5-viewer-file)))
-        (hdf5-viewer--display-fields fields)))
+      (setq-local hdf5-viewer-fields (hdf5-viewer--run-parser "--get-fields" hdf5-viewer-root-spc hdf5-viewer-file))
+      (hdf5-viewer--display-fields))
     ;; display ATTRIBUTES
-    (let* ((attrs  (hdf5-viewer--run-parser "--get-attrs"  hdf5-viewer-root-spc hdf5-viewer-file))
-           (num-attrs (hash-table-count attrs)))
-      (when (> num-attrs 0)
-        (hdf5-viewer--display-attrs attrs)))
+    (setq-local hdf5-viewer-attrs (hdf5-viewer--run-parser "--get-attrs"  hdf5-viewer-root-spc hdf5-viewer-file))
+    (when (> (hash-table-count hdf5-viewer-attrs) 0)
+      (hdf5-viewer--display-attrs))
     ;; set the point
     (superword-mode)
     (cond ((= direction -1)
