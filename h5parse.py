@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parser for hdf5-viewer.  Returns JSON objects for parsing in elisp."""
 
-# Copyright (C) 2024-2025 Paul Minner, Peter Mao, Caltech
+# Copyright (C) 2024-2026 Paul Minner, Peter Mao, Caltech
 
 import json
 import sys
